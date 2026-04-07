@@ -59,63 +59,134 @@ def resolve_ticker(raw):
 @st.cache_data(ttl=3600)
 def get_tw_stock_list():
     tickers = []
-    # 上市
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.twse.com.tw/",
+    }
+
+    # ── 上市：用 TWSE CSV 格式（最穩定）──
     try:
-        r = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
-                         timeout=20, headers={"User-Agent":"Mozilla/5.0"})
-        if r.status_code==200:
-            for item in r.json():
-                code=str(item.get("Code","")).strip()
-                name=str(item.get("Name","")).strip()
-                if code.isdigit() and 4<=len(code)<=5:
-                    tickers.append({"code":code,"name":name,"market":"上市","ticker":f"{code}.TW"})
+        r = requests.get(
+            "https://www.twse.com.tw/exchangeReport/STOCK_DAY_ALL?response=open_data",
+            headers=headers, timeout=20
+        )
+        if r.status_code == 200 and len(r.content) > 100:
+            from io import StringIO
+            df = pd.read_csv(StringIO(r.text))
+            for _, row in df.iterrows():
+                try:
+                    code = str(row.iloc[0]).strip().replace(" ","")
+                    name = str(row.iloc[1]).strip()
+                    if code.isdigit() and len(code) == 4:
+                        tickers.append({"code":code,"name":name,"market":"上市","ticker":f"{code}.TW"})
+                except: continue
     except: pass
 
-    # 上市備援
-    if len([t for t in tickers if t["market"]=="上市"])<100:
+    # ── 上市備援：openapi.twse ──
+    if len([t for t in tickers if t["market"]=="上市"]) < 100:
         try:
-            r2 = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/MI_INDEX20",
-                              timeout=20, headers={"User-Agent":"Mozilla/5.0"})
-            if r2.status_code==200:
+            r2 = requests.get(
+                "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
+                headers=headers, timeout=20
+            )
+            if r2.status_code == 200:
                 for item in r2.json():
-                    code=str(item.get("Code","")).strip()
-                    name=str(item.get("Name","")).strip()
-                    if code.isdigit() and 4<=len(code)<=5:
+                    code = str(item.get("Code","")).strip()
+                    name = str(item.get("Name","")).strip()
+                    if code.isdigit() and len(code) == 4:
                         if not any(t["code"]==code for t in tickers):
                             tickers.append({"code":code,"name":name,"market":"上市","ticker":f"{code}.TW"})
         except: pass
 
-    # 上櫃
+    # ── 上市備援2：ISIN 頁面 ──
+    if len([t for t in tickers if t["market"]=="上市"]) < 100:
+        try:
+            r3 = requests.get(
+                "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2",
+                headers={"User-Agent":"Mozilla/5.0"}, timeout=20
+            )
+            r3.encoding = "big5"
+            soup = BeautifulSoup(r3.text, "html.parser")
+            table = soup.find("table", {"class":"h4"})
+            if table:
+                for row in table.find_all("tr")[1:]:
+                    cells = row.find_all("td")
+                    if len(cells) < 2: continue
+                    try:
+                        cn = cells[0].text.strip()
+                        if "\u3000" in cn:
+                            code, name = cn.split("\u3000", 1)
+                            code = code.strip(); name = name.strip()
+                            if code.isdigit() and len(code) == 4:
+                                if not any(t["code"]==code for t in tickers):
+                                    tickers.append({"code":code,"name":name,"market":"上市","ticker":f"{code}.TW"})
+                    except: continue
+        except: pass
+
+    # ── 上櫃：TPEx ──
     try:
-        r3 = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
-                          timeout=20, headers={"User-Agent":"Mozilla/5.0"})
-        if r3.status_code==200:
-            for item in r3.json():
-                code=str(item.get("SecuritiesCompanyCode","")).strip()
-                name=str(item.get("CompanyName","")).strip()
-                if code and len(code)==4:
+        r4 = requests.get(
+            "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
+            headers=headers, timeout=20
+        )
+        if r4.status_code == 200:
+            for item in r4.json():
+                code = str(item.get("SecuritiesCompanyCode","")).strip()
+                name = str(item.get("CompanyName","")).strip()
+                if code and len(code) == 4:
                     tickers.append({"code":code,"name":name,"market":"上櫃","ticker":f"{code}.TWO"})
     except: pass
 
-    # 上櫃備援
-    if len([t for t in tickers if t["market"]=="上櫃"])<100:
+    # ── 上櫃備援 ──
+    if len([t for t in tickers if t["market"]=="上櫃"]) < 100:
         try:
-            r4 = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes",
-                              timeout=20, headers={"User-Agent":"Mozilla/5.0"})
-            if r4.status_code==200:
-                for item in r4.json():
-                    code=str(item.get("SecuritiesCompanyCode","")).strip()
-                    name=str(item.get("CompanyName","")).strip()
-                    if code and len(code)==4:
+            r5 = requests.get(
+                "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes",
+                headers=headers, timeout=20
+            )
+            if r5.status_code == 200:
+                for item in r5.json():
+                    code = str(item.get("SecuritiesCompanyCode","")).strip()
+                    name = str(item.get("CompanyName","")).strip()
+                    if code and len(code) == 4:
                         if not any(t["code"]==code for t in tickers):
                             tickers.append({"code":code,"name":name,"market":"上櫃","ticker":f"{code}.TWO"})
         except: pass
 
-    if len(tickers)<100:
-        fb_tw=[("2330","台積電"),("2317","鴻海"),("2454","聯發科"),("2308","台達電"),("2382","廣達"),("2412","中華電"),("2881","富邦金"),("2882","國泰金"),("2886","兆豐金"),("2303","聯電"),("2357","華碩"),("2002","中鋼"),("1301","台塑"),("1303","南亞"),("6505","台塑化"),("2603","長榮"),("2609","陽明"),("2615","萬海"),("3711","日月光"),("2408","南亞科"),("2884","玉山金"),("2885","元大金"),("2891","中信金"),("5880","合庫金"),("2353","宏碁"),("2324","仁寶"),("1216","統一"),("2912","統一超"),("1101","台泥"),("2618","長榮航"),("2610","華航"),("0050","台灣50"),("0056","高股息"),("6669","緯穎"),("3231","緯創"),("2887","台新金"),("2892","第一金"),("1326","台化"),("3045","台灣大"),("4904","遠傳"),("2379","瑞昱"),("3034","聯詠"),("2301","光寶科"),("2327","國巨"),("3017","奇鋐"),("5274","信驊"),("6415","矽力"),("2356","英業達"),("2376","技嘉"),("2395","研華"),("3008","大立光"),("2474","可成"),("4938","和碩"),("2347","聯強"),("2385","群光")]
-        fb_otc=[("3529","力旺"),("5269","祥碩"),("4966","譜瑞"),("3413","京鼎"),("8299","群聯"),("3105","穩懋"),("4961","天鈺"),("6510","精測"),("3443","創意"),("6278","台表科"),("3533","嘉澤"),("6547","高端疫苗")]
-        tickers=[{"code":c,"name":n,"market":"上市","ticker":f"{c}.TW"} for c,n in fb_tw]
-        tickers+=[{"code":c,"name":n,"market":"上櫃","ticker":f"{c}.TWO"} for c,n in fb_otc]
+    # ── 最終備用清單（API全失敗時） ──
+    if len([t for t in tickers if t["market"]=="上市"]) < 50:
+        fb_tw = [
+            ("2330","台積電"),("2317","鴻海"),("2454","聯發科"),("2308","台達電"),("2382","廣達"),
+            ("2412","中華電"),("2881","富邦金"),("2882","國泰金"),("2886","兆豐金"),("2303","聯電"),
+            ("2357","華碩"),("2002","中鋼"),("1301","台塑"),("1303","南亞"),("6505","台塑化"),
+            ("2603","長榮"),("2609","陽明"),("2615","萬海"),("3711","日月光"),("2408","南亞科"),
+            ("2884","玉山金"),("2885","元大金"),("2891","中信金"),("5880","合庫金"),("2353","宏碁"),
+            ("2324","仁寶"),("1216","統一"),("2912","統一超"),("1101","台泥"),("2618","長榮航"),
+            ("2610","華航"),("0050","台灣50"),("0056","高股息"),("6669","緯穎"),("3231","緯創"),
+            ("2887","台新金"),("2892","第一金"),("1326","台化"),("3045","台灣大"),("4904","遠傳"),
+            ("2379","瑞昱"),("3034","聯詠"),("2301","光寶科"),("2327","國巨"),("3017","奇鋐"),
+            ("5274","信驊"),("6415","矽力"),("2356","英業達"),("2376","技嘉"),("2395","研華"),
+            ("3008","大立光"),("2474","可成"),("4938","和碩"),("2347","聯強"),("2385","群光"),
+            ("6669","緯穎"),("2344","華邦電"),("2337","旺宏"),("3661","世芯-KY"),("2345","智邦"),
+            ("6443","元晶"),("2059","川湖"),("3034","聯詠"),("2049","上銀"),("1590","亞德客-KY"),
+        ]
+        existing_codes = {t["code"] for t in tickers}
+        for code, name in fb_tw:
+            if code not in existing_codes:
+                tickers.append({"code":code,"name":name,"market":"上市","ticker":f"{code}.TW"})
+
+    if len([t for t in tickers if t["market"]=="上櫃"]) < 20:
+        fb_otc = [
+            ("3529","力旺"),("5269","祥碩"),("4966","譜瑞"),("3413","京鼎"),
+            ("8299","群聯"),("3105","穩懋"),("4961","天鈺"),("6510","精測"),
+            ("3443","創意"),("6278","台表科"),("3533","嘉澤"),("6547","高端疫苗"),
+        ]
+        existing_codes = {t["code"] for t in tickers}
+        for code, name in fb_otc:
+            if code not in existing_codes:
+                tickers.append({"code":code,"name":name,"market":"上櫃","ticker":f"{code}.TWO"})
+
     return tickers
 
 @st.cache_data(ttl=300)
